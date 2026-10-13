@@ -53,18 +53,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Escaneo SCA
-        uses: orcasecurity/shiftleft-sca-action@v1
+      - name: Configurar Java 17 y cache de Maven
+        uses: actions/setup-java@v4
         with:
-          api_token: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
-          project_key: ${{ env.PROJECT_KEY }}
-          path: "."
-          format: "sarif"
-          output: "results/"
-          console_output: "table"
-          dependency_tree: true   # muestra de qué dependencia directa viene cada paquete vulnerable
-          exceptions_filepath: ".orca-exceptions.yml"   # CVEs heredados de la línea base (deuda aceptada)
-          hide_skipped_vulnerabilities: false            # los CVEs exceptuados siguen visibles como SKIPPED
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Resolver dependencias (arbol transitivo)
+        run: mvn -B -q dependency:resolve
+
+      - name: Instalar Orca CLI
+        run: |
+          curl -sfL 'https://raw.githubusercontent.com/orcasecurity/orca-cli/main/install.sh' | sh
+          orca-cli --version
+
+      - name: Escaneo SCA
+        env:
+          ORCA_SECURITY_API_TOKEN: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
+        run: >
+          orca-cli --project-key "${{ env.PROJECT_KEY }}" sca scan .
+          --exceptions-filepath .orca-exceptions.yml
+          --format sarif,json
+          --output results/
+          --console-output=table
+          --dependency-tree
+          --security-checks vulns,license,malicious
 
       - name: Guardar resultados SARIF
         if: always()
@@ -98,3 +112,83 @@ jobs:
         with:
           name: orca-secrets-sarif
           path: results/
+
+  dictamen:
+    name: Dictamen
+    runs-on: ubuntu-latest
+    needs: [sast, sca, secrets]
+    if: always()
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout (registro de deuda)
+        uses: actions/checkout@v4
+      - name: Descargar resultados de los escaneos
+        uses: actions/download-artifact@v4
+        with:
+          path: resultados
+
+      - name: Generar dictamen
+        env:
+          SAST_RESULT: ${{ needs.sast.result }}
+          SCA_RESULT: ${{ needs.sca.result }}
+          SECRETS_RESULT: ${{ needs.secrets.result }}
+          SBOM_URL: ${{ vars.ORCA_SBOM_URL }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SAST: "30"
+          BASE_SECRETS: "10"
+          BASE_IAC: "32"
+        run: |
+          SAST=resultados/orca-sast-sarif/sast.json
+          SCA=resultados/orca-sca-sarif/sca.json
+          SEC=resultados/orca-secrets-sarif/secrets.json
+
+          leer() { jq -r "$1" "$2" 2>/dev/null || echo "?"; }
+          icono() { if [ "$1" = "success" ]; then echo "✅"; else echo "❌"; fi; }
+
+          SAST_NEW=$(leer '.total_findings_count // 0' "$SAST")
+          SCA_NEW=$(leer '[.vulnerabilities[]?.vulnerabilities[]? | select(.status_summary.status == "FAILED" or .status_summary.status == "WARNING")] | length' "$SCA")
+          SCA_DEBT=$(grep -c -- '- id:' .orca-exceptions.yml 2>/dev/null || echo "?")
+          SEC_NEW=$(leer '(.results.secret_detection.results // []) | length' "$SEC")
+          SAST_URL=$(leer '.results_url' "$SAST")
+          SCA_URL=$(leer '.results_url' "$SCA")
+          SEC_URL=$(leer '.results_url' "$SEC")
+
+          if [ "$SAST_RESULT" = "success" ] && [ "$SCA_RESULT" = "success" ] && [ "$SECRETS_RESULT" = "success" ]; then
+            GATE="✅ APROBADA"
+          else
+            GATE="❌ BLOQUEADA"
+          fi
+
+          cat > dictamen.md <<EOF
+          ## 🛡️ Dictamen de seguridad – Orca
+
+          **Compuerta: ${GATE}** · commit ${HEAD_SHA:0:7}
+
+          | Análisis | Resultado | Hallazgos nuevos |
+          |---|---|---|
+          | SAST | $(icono "$SAST_RESULT") | **${SAST_NEW}** vulnerabilidades nuevas |
+          | SCA | $(icono "$SCA_RESULT") | **${SCA_NEW}** vulnerabilidades nuevas |
+          | Secretos | $(icono "$SECRETS_RESULT") | **${SEC_NEW}** secretos nuevos |
+
+          **Deuda histórica (separada; no bloquea):**
+          - SCA: ${SCA_DEBT} CVEs heredados (registro .orca-exceptions.yml, caducan 2026/12/31)
+          - SAST: ${BASE_SAST} · Secretos: ${BASE_SECRETS} · IaC: ${BASE_IAC} (línea base main @ 2a6cd08)
+
+          **SBOM (CycloneDX, generado y exportable desde Orca):** [abrir en Orca](${SBOM_URL})
+
+          Detalle en Orca: [SAST](${SAST_URL}) · [SCA](${SCA_URL}) · [Secretos](${SEC_URL})
+          EOF
+
+          sed -i 's/^          //' dictamen.md
+          cat dictamen.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar dictamen en el PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file dictamen.md --edit-last \
+            || gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file dictamen.md
