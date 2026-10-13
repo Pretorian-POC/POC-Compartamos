@@ -53,18 +53,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Escaneo SCA
-        uses: orcasecurity/shiftleft-sca-action@v1
+      - name: Configurar Java 17 y cache de Maven
+        uses: actions/setup-java@v4
         with:
-          api_token: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
-          project_key: ${{ env.PROJECT_KEY }}
-          path: "."
-          format: "sarif"
-          output: "results/"
-          console_output: "table"
-          dependency_tree: true   # muestra de qué dependencia directa viene cada paquete vulnerable
-          exceptions_filepath: ".orca-exceptions.yml"   # CVEs heredados de la línea base (deuda aceptada)
-          hide_skipped_vulnerabilities: false            # los CVEs exceptuados siguen visibles como SKIPPED
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Resolver dependencias (arbol transitivo)
+        run: mvn -B -q dependency:resolve
+
+      - name: Instalar Orca CLI
+        run: |
+          curl -sfL 'https://raw.githubusercontent.com/orcasecurity/orca-cli/main/install.sh' | sh
+          orca-cli --version
+
+      - name: Escaneo SCA
+        env:
+          ORCA_SECURITY_API_TOKEN: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
+        run: >
+          orca-cli --project-key "${{ env.PROJECT_KEY }}" sca scan .
+          --exceptions-filepath .orca-exceptions.yml
+          --format sarif,json
+          --output results/
+          --console-output=table
+          --dependency-tree
+          --security-checks vulns,license,malicious
 
       - name: Guardar resultados SARIF
         if: always()
