@@ -122,6 +122,8 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      - name: Checkout (registro de deuda)
+        uses: actions/checkout@v4
       - name: Descargar resultados de los escaneos
         uses: actions/download-artifact@v4
         with:
@@ -147,7 +149,7 @@ jobs:
 
           SAST_NEW=$(leer '.total_findings_count // 0' "$SAST")
           SCA_NEW=$(leer '[.vulnerabilities[]?.vulnerabilities[]? | select(.status_summary.status == "FAILED" or .status_summary.status == "WARNING")] | length' "$SCA")
-          SCA_DEBT=$(leer '[.vulnerabilities[]?.vulnerabilities[]? | select(.status_summary.status == "SKIPPED")] | length' "$SCA")
+          SCA_DEBT=$(grep -c -- '- id:' .orca-exceptions.yml 2>/dev/null || echo "?")
           SEC_NEW=$(leer '(.results.secret_detection.results // []) | length' "$SEC")
           SAST_URL=$(leer '.results_url' "$SAST")
           SCA_URL=$(leer '.results_url' "$SCA")
@@ -171,7 +173,7 @@ jobs:
           | Secretos | $(icono "$SECRETS_RESULT") | **${SEC_NEW}** secretos nuevos |
 
           **Deuda histórica (separada; no bloquea):**
-          - SCA: ${SCA_DEBT} CVEs heredados, exceptuados hasta 2026/12/31
+          - SCA: ${SCA_DEBT} CVEs heredados (registro .orca-exceptions.yml, caducan 2026/12/31)
           - SAST: ${BASE_SAST} · Secretos: ${BASE_SECRETS} · IaC: ${BASE_IAC} (línea base main @ 2a6cd08)
 
           **SBOM (CycloneDX, generado y exportable desde Orca):** [abrir en Orca](${SBOM_URL})
