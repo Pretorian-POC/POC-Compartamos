@@ -1,0 +1,100 @@
+# Workflow de seguridad del proveedor (Orca) - PoC AppSec
+# Independiente de build.yml (que forma parte del material a analizar).
+# Se ejecuta en cada PR hacia develop o main, y manualmente desde la pestaña Actions.
+
+name: Orca Security
+
+on:
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+# Permisos mínimos: solo lectura del código.
+permissions:
+  contents: read
+
+env:
+  # Variable de repositorio (Settings > Secrets and variables > Actions > Variables)
+  PROJECT_KEY: ${{ vars.ORCA_PROJECT_KEY }}
+
+jobs:
+  sast:
+    name: Orca SAST
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # historial completo: necesario para el análisis diferencial del PR
+
+      - name: Escaneo SAST
+        uses: orcasecurity/shiftleft-sast-action@v1
+        with:
+          api_token: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
+          project_key: ${{ env.PROJECT_KEY }}
+          path: "."
+          format: "sarif"
+          output: "results/"
+          console_output: "cli"   # SAST no acepta "table"
+
+      - name: Guardar resultados SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orca-sast-sarif
+          path: results/
+
+  sca:
+    name: Orca SCA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Escaneo SCA
+        uses: orcasecurity/shiftleft-sca-action@v1
+        with:
+          api_token: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
+          project_key: ${{ env.PROJECT_KEY }}
+          path: "."
+          format: "sarif"
+          output: "results/"
+          console_output: "table"
+          dependency_tree: true   # muestra de qué dependencia directa viene cada paquete vulnerable
+          exceptions_filepath: ".orca-exceptions.yml"   # CVEs heredados de la línea base (deuda aceptada)
+          hide_skipped_vulnerabilities: false            # los CVEs exceptuados siguen visibles como SKIPPED
+
+      - name: Guardar resultados SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orca-sca-sarif
+          path: results/
+
+  secrets:
+    name: Orca Secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # obligatorio para escanear los commits del PR
+
+      - name: Escaneo de secretos
+        uses: orcasecurity/shiftleft-secrets-action@v1
+        with:
+          api_token: ${{ secrets.ORCA_SECURITY_API_TOKEN }}
+          project_key: ${{ env.PROJECT_KEY }}
+          path: "."
+          format: "sarif"
+          output: "results/"
+          console_output: "table"
+
+      - name: Guardar resultados SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orca-secrets-sarif
+          path: results/

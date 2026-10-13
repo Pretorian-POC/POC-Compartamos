@@ -1,0 +1,15 @@
+# Deuda heredada de la linea base (commit 2a6cd08).
+# Aceptada temporalmente durante la PoC; sigue visible como SKIPPED.
+vulnerabilities:
+  - id: CVE-2023-22102   # mysql-connector-j 8.0.33
+    expiration: 2026/12/31
+  - id: CVE-2022-42889   # commons-text 1.9
+    expiration: 2026/12/31
+  - id: CVE-2021-44228   # log4j-core 2.14.1
+    expiration: 2026/12/31
+  - id: CVE-2021-45046   # log4j-core 2.14.1
+    expiration: 2026/12/31
+  - id: CVE-2022-1471    # snakeyaml 1.30
+    expiration: 2026/12/31
+  - id: CVE-2022-25857   # snakeyaml 1.30
+    expiration: 2026/12/31
