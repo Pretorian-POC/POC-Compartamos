@@ -20,7 +20,7 @@ public class MerchantExportController {
 
     @GetMapping("/export")
     public List<Map<String, Object>> exportByCurrency(@RequestParam String currency) {
-        String query = "SELECT id, merchant_id, amount FROM payments WHERE currency = '" + currency + "'";
-        return jdbc.queryForList(query);
+        String query = "SELECT id, merchant_id, amount FROM payments WHERE currency = ?";
+        return jdbc.queryForList(query, currency);
     }
 }
